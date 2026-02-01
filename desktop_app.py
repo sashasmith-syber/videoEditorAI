@@ -35,6 +35,124 @@ def get_audio_track_count(video_path: str) -> int:
         return 0
 
 
+def get_video_duration(video_path: str) -> float:
+    """Get duration in seconds using ffprobe. Returns 0 on error."""
+    try:
+        cmd = [
+            "ffprobe", "-loglevel", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", video_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return 0.0
+        return float(result.stdout.strip())
+    except (subprocess.SubprocessError, FileNotFoundError, ValueError):
+        return 0.0
+
+
+def cut_segment(
+    video_path: str,
+    start_sec: float,
+    duration_sec: float,
+    out_path: str,
+    video_format: str,
+) -> bool:
+    """Cut one segment (video+audio) from video_path to out_path. Returns True on success."""
+    try:
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(start_sec),
+            "-i", video_path,
+            "-t", str(duration_sec),
+            "-c", "copy",
+            "-avoid_negative_ts", "1",
+            out_path,
+        ]
+        r = subprocess.run(cmd, capture_output=True, check=False)
+        if r.returncode != 0:
+            cmd = [
+                "ffmpeg", "-y", "-i", video_path,
+                "-ss", str(start_sec), "-t", str(duration_sec),
+                out_path,
+            ]
+            subprocess.run(cmd, capture_output=True, check=True)
+        return True
+    except (subprocess.SubprocessError, FileNotFoundError):
+        return False
+
+
+def build_fixed_clips(
+    video_paths: list[str],
+    output_dir: str,
+    video_format: str,
+    num_clips: int,
+    clip_duration_sec: float,
+    progress_callback: None | callable = None,
+    stop_check: None | callable = None,
+) -> int:
+    """
+    From one or more videos, produce exactly num_clips clips, each clip_duration_sec long, with audio.
+    Clips are taken in order: first video 0..D, D..2D, ... then next video, etc.
+    Returns number of clips actually written.
+    """
+    clips_dir = os.path.join(output_dir, "clips")
+    os.makedirs(clips_dir, exist_ok=True)
+    written = 0
+    total_needed = num_clips
+    current_file_idx = 0
+    current_start = 0.0
+
+    while written < total_needed and current_file_idx < len(video_paths):
+        if stop_check and stop_check():
+            break
+        path = video_paths[current_file_idx]
+        duration = get_video_duration(path)
+        if duration <= 0:
+            current_file_idx += 1
+            current_start = 0.0
+            continue
+
+        while current_start + clip_duration_sec <= duration and written < total_needed:
+            if stop_check and stop_check():
+                break
+            out_name = f"clip_{written + 1:03d}.{video_format}"
+            out_path = os.path.join(clips_dir, out_name)
+            if progress_callback:
+                progress_callback(written + 1, total_needed, os.path.basename(path))
+            if cut_segment(path, current_start, clip_duration_sec, out_path, video_format):
+                written += 1
+            current_start += clip_duration_sec
+
+        if current_start >= duration or current_start + clip_duration_sec > duration:
+            current_file_idx += 1
+            current_start = 0.0
+
+    return written
+
+
+def export_video_clip(video_path: str, output_dir: str, video_format: str) -> None:
+    """Export one video clip per input: same content, output format in output/clips/."""
+    clips_dir = os.path.join(output_dir, "clips")
+    os.makedirs(clips_dir, exist_ok=True)
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    out_path = os.path.join(clips_dir, f"{base_name}.{video_format}")
+    try:
+        subprocess.run(
+            ["ffmpeg", "-i", video_path, "-c", "copy", "-y", out_path],
+            capture_output=True,
+            check=True,
+        )
+    except (subprocess.SubprocessError, FileNotFoundError):
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", video_path, "-y", out_path],
+                capture_output=True,
+                check=True,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+
 def extract_audio_tracks(video_path: str, output_dir: str, audio_format: str) -> None:
     """Extract all audio tracks from a video file."""
     count = get_audio_track_count(video_path)
@@ -183,6 +301,17 @@ class VideoEditorApp:
         self.combine_audio_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(settings_frame, text="Combine all audio tracks into one", variable=self.combine_audio_var).pack(anchor=tk.W)
 
+        # 6-sec clip mode: N clips × 6 sec = 60 or 120 sec total, each with audio
+        clip_row = ttk.Frame(settings_frame)
+        clip_row.pack(fill=tk.X, pady=5)
+        ttk.Label(clip_row, text="Number of clips:", width=14).pack(side=tk.LEFT)
+        self.num_clips_var = tk.StringVar(value="20")
+        ttk.Combobox(clip_row, textvariable=self.num_clips_var, values=["10", "20"], width=6, state="readonly").pack(side=tk.LEFT, padx=5)
+        ttk.Label(clip_row, text="Clip duration (sec):", width=16).pack(side=tk.LEFT, padx=(10, 0))
+        self.clip_duration_var = tk.StringVar(value="6")
+        ttk.Spinbox(clip_row, textvariable=self.clip_duration_var, from_=1, to=60, width=5).pack(side=tk.LEFT, padx=5)
+        ttk.Label(clip_row, text="(e.g. 20 × 6 sec = 120 sec total)", font=("", 9)).pack(side=tk.LEFT, padx=5)
+
         # Processing
         proc_frame = ttk.LabelFrame(main, text="Processing", padding=5)
         proc_frame.pack(fill=tk.X, pady=5)
@@ -254,31 +383,65 @@ class VideoEditorApp:
         self.status_var.set("Stopping...")
 
     def _process_videos(self):
-        total = len(self.selected_files)
         output_dir = self.output_dir_var.get().strip() or os.path.join(os.getcwd(), "output")
         audio_fmt = self.audio_fmt_var.get()
+        video_fmt = self.video_fmt_var.get()
+        try:
+            num_clips = int(self.num_clips_var.get().strip() or "20")
+            num_clips = max(1, min(100, num_clips))
+        except ValueError:
+            num_clips = 20
+        try:
+            clip_duration = float(self.clip_duration_var.get().strip() or "6")
+            clip_duration = max(0.5, min(120.0, clip_duration))
+        except ValueError:
+            clip_duration = 6.0
+
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(os.path.join(output_dir, "audio"), exist_ok=True)
         os.makedirs(os.path.join(output_dir, "clips"), exist_ok=True)
 
+        def on_progress(current: int, total: int, source_name: str) -> None:
+            self.root.after(0, lambda: self.status_var.set(f"Clip {current}/{total} from {source_name}"))
+            self.root.after(0, lambda: self.progress_var.set(100.0 * current / total if total else 0))
+
+        def should_stop() -> bool:
+            return self.stop_requested
+
+        # 1) Build N clips of D sec each (with audio) → output/clips/clip_001.mp4, ...
+        written = build_fixed_clips(
+            self.selected_files,
+            output_dir,
+            video_fmt,
+            num_clips=num_clips,
+            clip_duration_sec=clip_duration,
+            progress_callback=on_progress,
+            stop_check=should_stop,
+        )
+
+        # 2) Extract full audio tracks → output/audio/ (optional, for reference)
         for i, path in enumerate(self.selected_files):
             if self.stop_requested:
                 break
-            name = os.path.basename(path)
-            self.root.after(0, lambda n=name, idx=i, tot=total: self.status_var.set(f"Processing: {n} ({idx + 1}/{tot})"))
-            self.root.after(0, lambda v=100 * (i / total): self.progress_var.set(v))
             extract_audio_tracks(path, output_dir, audio_fmt)
 
         self.root.after(0, self.progress_var.set, 100.0)
         self.processing = False
-        self.root.after(0, self._on_processing_done)
+        self.root.after(0, lambda: self._on_processing_done(written, num_clips, clip_duration))
 
     def _on_processing_done(self):
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         count = len(self.selected_files)
         self.status_var.set(f"Done. Processed {count} file(s). Output in: {self.output_dir_var.get()}")
-        messagebox.showinfo("Complete", f"Processed {count} file(s).\n\nOutput: {self.output_dir_var.get()}")
+        out = self.output_dir_var.get()
+        messagebox.showinfo(
+            "Complete",
+            f"Processed {count} file(s).\n\n"
+            f"Output: {out}\n"
+            f"  • Clips (video): {out}/clips/\n"
+            f"  • Audio: {out}/audio/",
+        )
 
     def run(self):
         self.root.mainloop()
