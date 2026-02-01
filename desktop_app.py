@@ -429,18 +429,19 @@ class VideoEditorApp:
         self.processing = False
         self.root.after(0, lambda: self._on_processing_done(written, num_clips, clip_duration))
 
-    def _on_processing_done(self):
+    def _on_processing_done(self, clips_written: int = 0, num_clips: int = 0, clip_duration: float = 0):
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
-        count = len(self.selected_files)
-        self.status_var.set(f"Done. Processed {count} file(s). Output in: {self.output_dir_var.get()}")
         out = self.output_dir_var.get()
+        total_sec = clips_written * clip_duration if clip_duration else 0
+        self.status_var.set(f"Done. {clips_written} clip(s) × {clip_duration:.0f} sec = {total_sec:.0f} sec total.")
         messagebox.showinfo(
             "Complete",
-            f"Processed {count} file(s).\n\n"
+            f"Created {clips_written} clip(s), each {clip_duration:.0f} sec (with audio).\n"
+            f"Total: {total_sec:.0f} sec.\n\n"
             f"Output: {out}\n"
-            f"  • Clips (video): {out}/clips/\n"
-            f"  • Audio: {out}/audio/",
+            f"  • Clips (video+audio): {out}/clips/\n"
+            f"  • Audio tracks: {out}/audio/",
         )
 
     def run(self):
