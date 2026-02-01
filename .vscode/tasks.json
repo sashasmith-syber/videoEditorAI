@@ -1,0 +1,59 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Desktop App",
+			"type": "shell",
+			"command": "python",
+			"args": ["desktop_app.py"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Run Desktop App (batch)",
+			"type": "shell",
+			"command": "${workspaceFolder}/run_desktop.bat",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Run autoedit (Python CLI)",
+			"type": "shell",
+			"command": "python",
+			"args": ["autoedit.py", "-input", "input", "-output", "output"],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "none",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "Check FFmpeg",
+			"type": "shell",
+			"command": "ffmpeg -version",
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "none",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		}
+	]
+}

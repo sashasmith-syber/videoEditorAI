@@ -60,8 +60,49 @@ def extract_audio_tracks(video_path: str, output_dir: str, audio_format: str) ->
             pass
 
 
+def _get_ffmpeg_dir() -> str | None:
+    """Find directory containing ffmpeg.exe (PATH or WinGet install). Returns None if not found."""
+    # 1. Check if ffmpeg is already in PATH
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        return ""  # empty = use PATH as-is
+    except (subprocess.SubprocessError, FileNotFoundError):
+        pass
+
+    # 2. Windows: check WinGet Links (winget installs often not in PATH for existing processes)
+    if sys.platform == "win32":
+        localappdata = os.environ.get("LOCALAPPDATA", "")
+        winget_links = os.path.join(localappdata, "Microsoft", "WinGet", "Links")
+        ffmpeg_exe = os.path.join(winget_links, "ffmpeg.exe")
+        if os.path.isfile(ffmpeg_exe):
+            return winget_links
+
+        # 3. Scan WinGet Packages for Gyan.FFmpeg
+        winget_packages = os.path.join(localappdata, "Microsoft", "WinGet", "Packages")
+        if os.path.isdir(winget_packages):
+            for name in os.listdir(winget_packages):
+                if "Gyan.FFmpeg" in name or "ffmpeg" in name.lower():
+                    p = os.path.join(winget_packages, name)
+                    if os.path.isdir(p):
+                        # Look for bin folder or ffmpeg.exe in root
+                        for candidate in [p, os.path.join(p, "bin")]:
+                            if os.path.isfile(os.path.join(candidate, "ffmpeg.exe")):
+                                return candidate
+    return None
+
+
+def _ensure_ffmpeg_in_path() -> None:
+    """If ffmpeg is found in WinGet (or similar) but not in PATH, prepend it for this process."""
+    ffmpeg_dir = _get_ffmpeg_dir()
+    if ffmpeg_dir is None:
+        return
+    if ffmpeg_dir and ffmpeg_dir not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ.get("PATH", "")
+
+
 def check_ffmpeg() -> bool:
-    """Check if ffmpeg is available."""
+    """Check if ffmpeg is available (after ensuring WinGet path is applied)."""
+    _ensure_ffmpeg_in_path()
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         return True
@@ -83,6 +124,9 @@ def get_video_files_from_folder(folder: str) -> list[str]:
 
 class VideoEditorApp:
     def __init__(self):
+        # Ensure FFmpeg from WinGet is on PATH (fixes "FFmpeg missing" when launched from editor)
+        _ensure_ffmpeg_in_path()
+
         self.root = tk.Tk()
         self.root.title("Video Editor AI - Automatic Video Editor")
         self.root.geometry("800x650")
