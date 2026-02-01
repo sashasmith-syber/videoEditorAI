@@ -1,0 +1,22 @@
+{
+	"version": "0.2.0",
+	"configurations": [
+		{
+			"name": "Run Desktop App",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceFolder}/desktop_app.py",
+			"cwd": "${workspaceFolder}",
+			"console": "integratedTerminal"
+		},
+		{
+			"name": "Run autoedit (Python CLI)",
+			"type": "python",
+			"request": "launch",
+			"program": "${workspaceFolder}/autoedit.py",
+			"args": ["-input", "input", "-output", "output"],
+			"cwd": "${workspaceFolder}",
+			"console": "integratedTerminal"
+		}
+	]
+}
